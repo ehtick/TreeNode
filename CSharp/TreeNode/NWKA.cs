@@ -24,6 +24,21 @@ namespace PhyloTree.Formats
         /// <returns>The parsed <see cref="TreeNode"/> object.</returns>
         public static TreeNode ParseTree(string source, bool debug = false, TreeNode parent = null, bool slashSeparator = true)
         {
+            TryParseTree(source, out TreeNode tbr, debug, parent, slashSeparator);
+            return tbr;
+        }
+
+        /// <summary>
+        /// Parse a Newick-with-Attributes string into a TreeNode object.
+        /// </summary>
+        /// <param name="source">The Newick-with-Attributes string. This string must specify only a single tree.</param>
+        /// <param name="tree">When this method returns, this variable will contain the parsed tree.</param>
+        /// <param name="parent">The parent node of this node. If parsing a whole tree, this parameter should be left equal to <c>null</c>.</param>
+        /// <param name="debug">When this is <c>true</c>, debug information is printed to the standard output during the parsing.</param>
+        /// <param name="slashSeparator">Determines whether forward slash characters are allowed as attribute separators. Set this to <see langword="false"/> if you expect <c>'/'</c> to appear within taxon names.</param>
+        /// <returns><see langword="true"/> if the Newick-with-attributes string was parsed correctly, <see langword="false"/> if an error occurred (the parsed <paramref name="tree"/> will still contain the nodes parsed until the point where the error occurred).</returns>
+        public static bool TryParseTree(string source, out TreeNode tree, bool debug = false, TreeNode parent = null, bool slashSeparator = true)
+        {
             Contract.Requires(source != null);
 
             source = source.Trim();
@@ -34,7 +49,7 @@ namespace PhyloTree.Formats
 
             if (debug)
             {
-                Console.WriteLine("Parsing: " + source);
+                Console.WriteLine("Parsing: {0}", source);
             }
 
             if (source.StartsWith("(", StringComparison.OrdinalIgnoreCase))
@@ -137,15 +152,15 @@ namespace PhyloTree.Formats
                     Console.WriteLine();
                 }
 
-                TreeNode tbr = new TreeNode(parent);
+                tree = new TreeNode(parent);
 
-                ParseAttributes(sr, ref eof, tbr, children.Count, slashSeparator);
+                bool currResult = ParseAttributes(sr, ref eof, tree, children.Count, slashSeparator);
 
                 if (debug)
                 {
-                    Console.WriteLine("Attributes:");
+                    Console.WriteLine("Attributes:" + (!currResult ? " [** Error **]" : ""));
 
-                    foreach (KeyValuePair<string, object> kvp in tbr.Attributes)
+                    foreach (KeyValuePair<string, object> kvp in tree.Attributes)
                     {
                         Console.WriteLine(" - " + kvp.Key + " = " + kvp.Value.ToString());
                     }
@@ -154,12 +169,21 @@ namespace PhyloTree.Formats
                     Console.WriteLine();
                 }
 
+                bool childResults = true;
+
                 for (int i = 0; i < children.Count; i++)
                 {
-                    tbr.Children.Add(ParseTree(children[i], debug, tbr, slashSeparator));
+                    bool result = TryParseTree(children[i], out TreeNode child, debug, tree, slashSeparator);
+                    tree.Children.Add(child);
+                    childResults = childResults && result;
                 }
 
-                return tbr;
+                if (debug && !(closed && currResult))
+                {
+                    Console.WriteLine("--> ** Error while parsing {0} **", source);
+                }
+
+                return closed && currResult && childResults;
             }
             else
             {
@@ -167,16 +191,16 @@ namespace PhyloTree.Formats
 
                 bool eof = false;
 
-                TreeNode tbr = new TreeNode(parent);
+                tree = new TreeNode(parent);
 
-                ParseAttributes(sr, ref eof, tbr, 0, slashSeparator);
+                bool currResult = ParseAttributes(sr, ref eof, tree, 0, slashSeparator);
 
                 if (debug)
                 {
                     Console.WriteLine();
-                    Console.WriteLine("Attributes:");
+                    Console.WriteLine("Attributes:" + (!currResult ? " [** Error **]" : ""));
 
-                    foreach (KeyValuePair<string, object> kvp in tbr.Attributes)
+                    foreach (KeyValuePair<string, object> kvp in tree.Attributes)
                     {
                         Console.WriteLine(" - " + kvp.Key + " = " + kvp.Value.ToString());
                     }
@@ -184,7 +208,7 @@ namespace PhyloTree.Formats
                     Console.WriteLine();
                 }
 
-                return tbr;
+                return currResult;
             }
         }
 
@@ -246,7 +270,7 @@ namespace PhyloTree.Formats
                         yield break;
                     }
 
-                    yield return tbr;   
+                    yield return tbr;
                 }
             }
         }
@@ -375,7 +399,8 @@ namespace PhyloTree.Formats
         /// <param name="node">The <see cref="TreeNode"/> whose attributes we are parsing.</param>
         /// <param name="childCount">The number of children of <paramref name="node"/>.</param>
         /// <param name="slashSeparator">Determines whether forward slash characters are allowed as attribute separators.</param>
-        internal static void ParseAttributes(TextReader sr, ref bool eof, TreeNode node, int childCount, bool slashSeparator)
+        /// <returns><see langword="true"/> if no errors occurred while parsing the attributes, <see langword="false"/> if errors occurred.</returns>
+        internal static bool ParseAttributes(TextReader sr, ref bool eof, TreeNode node, int childCount, bool slashSeparator)
         {
             StringBuilder attributeValue = new StringBuilder();
             StringBuilder attributeName = new StringBuilder();
@@ -396,6 +421,8 @@ namespace PhyloTree.Formats
             bool closedOuterBrackets = false;
 
             bool withinBrackets = false;
+            bool awaitingValue = false;
+            bool missingValueError = false;
 
             char expectedClosingBrackets = '\0';
 
@@ -442,11 +469,14 @@ namespace PhyloTree.Formats
                     {
                         withinBrackets = true;
                     }
+
+                    awaitingValue = true;
                 }
                 else if ((eof || ((c2 == ':' || (c2 == '/' && slashSeparator) || c2 == ',') && openSquareCount == 0 && openCurlyCount == 0)) && !escaped && !openQuotes && !openApostrophe)
                 {
                     if (attributeValue.Length > 0 && !string.IsNullOrWhiteSpace(attributeValue.ToString()))
                     {
+                        awaitingValue = false;
                         string name = attributeName.ToString().Trim();
 
                         if (name.StartsWith("&", StringComparison.OrdinalIgnoreCase))
@@ -517,6 +547,12 @@ namespace PhyloTree.Formats
                                 }
                                 else
                                 {
+                                    if (awaitingValue)
+                                    {
+                                        awaitingValue = false;
+                                        missingValueError = true;
+                                    }
+
                                     string name = "Unknown";
 
                                     if (node.Attributes.ContainsKey(name))
@@ -554,6 +590,12 @@ namespace PhyloTree.Formats
                                     }
                                     else
                                     {
+                                        if (awaitingValue)
+                                        {
+                                            awaitingValue = false;
+                                            missingValueError = true;
+                                        }
+
                                         string name = "Unknown";
 
                                         if (node.Attributes.ContainsKey(name))
@@ -607,10 +649,15 @@ namespace PhyloTree.Formats
                                         {
                                             supportCount++;
                                             node.Attributes["Support" + supportCount.ToString(System.Globalization.CultureInfo.InvariantCulture)] = result3;
-                                        }   
+                                        }
                                     }
                                     else
                                     {
+                                        if (awaitingValue)
+                                        {
+                                            awaitingValue = false;
+                                            missingValueError = true;
+                                        }
 
                                         string name = "Unknown";
 
@@ -716,6 +763,8 @@ namespace PhyloTree.Formats
             {
                 node.Support = Convert.ToDouble(node.Attributes["prob"], System.Globalization.CultureInfo.InvariantCulture);
             }
+
+            return !openQuotes && !openApostrophe && !withinBrackets && !escaping && !awaitingValue && !missingValueError;
         }
 
         /// <summary>
