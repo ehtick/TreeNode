@@ -366,7 +366,7 @@ namespace PhyloTree.Formats
                             if (preCommentsString != "[&R]" && preCommentsString != "[&U]")
                             {
                                 using StringReader sr = new StringReader(preCommentsString);
-                                NWKA.ParseAttributes(sr, ref tempEof, parsedTree, parsedTree.Children.Count);
+                                NWKA.ParseAttributes(sr, ref tempEof, parsedTree, parsedTree.Children.Count, true);
                             }
 
                             if (parsedTree.Name == tempGuid)

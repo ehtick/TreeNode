@@ -20,8 +20,9 @@ namespace PhyloTree.Formats
         /// <param name="source">The Newick-with-Attributes string. This string must specify only a single tree.</param>
         /// <param name="parent">The parent node of this node. If parsing a whole tree, this parameter should be left equal to <c>null</c>.</param>
         /// <param name="debug">When this is <c>true</c>, debug information is printed to the standard output during the parsing.</param>
+        /// <param name="slashSeparator">Determines whether forward slash characters are allowed as attribute separators. Set this to <see langword="false"/> if you expect <c>'/'</c> to appear within taxon names.</param>
         /// <returns>The parsed <see cref="TreeNode"/> object.</returns>
-        public static TreeNode ParseTree(string source, bool debug = false, TreeNode parent = null)
+        public static TreeNode ParseTree(string source, bool debug = false, TreeNode parent = null, bool slashSeparator = true)
         {
             Contract.Requires(source != null);
 
@@ -138,7 +139,7 @@ namespace PhyloTree.Formats
 
                 TreeNode tbr = new TreeNode(parent);
 
-                ParseAttributes(sr, ref eof, tbr, children.Count);
+                ParseAttributes(sr, ref eof, tbr, children.Count, slashSeparator);
 
                 if (debug)
                 {
@@ -155,7 +156,7 @@ namespace PhyloTree.Formats
 
                 for (int i = 0; i < children.Count; i++)
                 {
-                    tbr.Children.Add(ParseTree(children[i], debug, tbr));
+                    tbr.Children.Add(ParseTree(children[i], debug, tbr, slashSeparator));
                 }
 
                 return tbr;
@@ -168,7 +169,7 @@ namespace PhyloTree.Formats
 
                 TreeNode tbr = new TreeNode(parent);
 
-                ParseAttributes(sr, ref eof, tbr, 0);
+                ParseAttributes(sr, ref eof, tbr, 0, slashSeparator);
 
                 if (debug)
                 {
@@ -192,9 +193,10 @@ namespace PhyloTree.Formats
         /// </summary>
         /// <param name="source">The <see cref="string"/> from which the trees should be read.</param>
         /// <param name="debug">When this is <c>true</c>, debug information is printed to the standard output during the parsing.</param>
+        /// <param name="slashSeparator">Determines whether forward slash characters are allowed as attribute separators. Set this to <see langword="false"/> if you expect <c>'/'</c> to appear within taxon names.</param>
         /// <returns>A lazy <see cref="IEnumerable{T}"/> containing the trees defined in the string.</returns>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031")]
-        public static IEnumerable<TreeNode> ParseTreesFromSource(string source, bool debug = false)
+        public static IEnumerable<TreeNode> ParseTreesFromSource(string source, bool debug = false, bool slashSeparator = true)
         {
             bool escaping = false;
             bool openQuotes = false;
@@ -233,7 +235,7 @@ namespace PhyloTree.Formats
 
                     try
                     {
-                        tbr = ParseTree(treeString, debug, null);
+                        tbr = ParseTree(treeString, debug, null, slashSeparator);
                         if (!tbr.Attributes.ContainsKey("TreeName") && !string.IsNullOrWhiteSpace(treeName))
                         {
                             tbr.Attributes["TreeName"] = treeName;
@@ -280,9 +282,10 @@ namespace PhyloTree.Formats
         /// <param name="keepOpen">Determines whether the stream should be disposed at the end of this method or not.</param>
         /// <param name="progressAction">An <see cref="Action" /> that will be called after each tree is parsed, with the approximate progress (as determined by the position in the stream), ranging from 0 to 1.</param>
         /// <param name="debug">When this is <c>true</c>, debug information is printed to the standard output during the parsing.</param>
+        /// <param name="slashSeparator">Determines whether forward slash characters are allowed as attribute separators. Set this to <see langword="false"/> if you expect <c>'/'</c> to appear within taxon names.</param>
         /// <returns>A lazy <see cref="IEnumerable{T}"/> containing the trees defined in the file.</returns>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031")]
-        public static IEnumerable<TreeNode> ParseTrees(Stream inputStream, bool keepOpen = false, Action<double> progressAction = null, bool debug = false)
+        public static IEnumerable<TreeNode> ParseTrees(Stream inputStream, bool keepOpen = false, Action<double> progressAction = null, bool debug = false, bool slashSeparator = false)
         {
             bool escaping = false;
             bool openQuotes = false;
@@ -321,7 +324,7 @@ namespace PhyloTree.Formats
 
                     try
                     {
-                        tbr = ParseTree(treeString, debug, null);
+                        tbr = ParseTree(treeString, debug, null, slashSeparator);
                         if (!tbr.Attributes.ContainsKey("TreeName") && !string.IsNullOrWhiteSpace(treeName))
                         {
                             tbr.Attributes["TreeName"] = treeName;
@@ -371,7 +374,8 @@ namespace PhyloTree.Formats
         /// <param name="eof">A <see cref="bool"/> indicating whether we have reach the end of the stream.</param>
         /// <param name="node">The <see cref="TreeNode"/> whose attributes we are parsing.</param>
         /// <param name="childCount">The number of children of <paramref name="node"/>.</param>
-        internal static void ParseAttributes(TextReader sr, ref bool eof, TreeNode node, int childCount)
+        /// <param name="slashSeparator">Determines whether forward slash characters are allowed as attribute separators.</param>
+        internal static void ParseAttributes(TextReader sr, ref bool eof, TreeNode node, int childCount, bool slashSeparator)
         {
             StringBuilder attributeValue = new StringBuilder();
             StringBuilder attributeName = new StringBuilder();
@@ -439,7 +443,7 @@ namespace PhyloTree.Formats
                         withinBrackets = true;
                     }
                 }
-                else if ((eof || ((c2 == ':' || c2 == '/' || c2 == ',') && openSquareCount == 0 && openCurlyCount == 0)) && !escaped && !openQuotes && !openApostrophe)
+                else if ((eof || ((c2 == ':' || (c2 == '/' && slashSeparator) || c2 == ',') && openSquareCount == 0 && openCurlyCount == 0)) && !escaped && !openQuotes && !openApostrophe)
                 {
                     if (attributeValue.Length > 0 && !string.IsNullOrWhiteSpace(attributeValue.ToString()))
                     {
@@ -533,38 +537,41 @@ namespace PhyloTree.Formats
                                 }
                                 break;
                             case '/':
-                                if (double.TryParse(attributeName.ToString().Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double result2))
+                                if (slashSeparator)
                                 {
-                                    if (supportCount == 0)
+                                    if (double.TryParse(attributeName.ToString().Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double result2))
                                     {
-                                        node.Support = result2;
-                                        supportCount++;
+                                        if (supportCount == 0)
+                                        {
+                                            node.Support = result2;
+                                            supportCount++;
+                                        }
+                                        else
+                                        {
+                                            supportCount++;
+                                            node.Attributes["Support" + supportCount.ToString(System.Globalization.CultureInfo.InvariantCulture)] = result2;
+                                        }
                                     }
                                     else
                                     {
-                                        supportCount++;
-                                        node.Attributes["Support" + supportCount.ToString(System.Globalization.CultureInfo.InvariantCulture)] = result2;
-                                    }
-                                }
-                                else
-                                {
-                                    string name = "Unknown";
+                                        string name = "Unknown";
 
-                                    if (node.Attributes.ContainsKey(name))
-                                    {
-                                        int ind = 2;
-                                        string newName = name + ind.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-                                        while (node.Attributes.ContainsKey(newName))
+                                        if (node.Attributes.ContainsKey(name))
                                         {
-                                            ind++;
-                                            newName = name + ind.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                                            int ind = 2;
+                                            string newName = name + ind.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                                            while (node.Attributes.ContainsKey(newName))
+                                            {
+                                                ind++;
+                                                newName = name + ind.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                                            }
+
+                                            name = newName;
                                         }
 
-                                        name = newName;
+                                        node.Attributes.Add(name, attributeName.ToString().Trim());
                                     }
-
-                                    node.Attributes.Add(name, attributeName.ToString().Trim());
                                 }
                                 break;
                             case ',':
